@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تبدیل گفتار به متن</title>
+<style>
+:root{--bg:#f4f6fa;--fg:#161a22;--mut:#7a8294;--bd:#c9d0dc;--hv:#e6eaf2;--ac:#2563eb;color-scheme:light}
+:root[data-theme=dark]{--bg:#0f1117;--fg:#e8ebf2;--mut:#8b93a5;--bd:#2c3342;--hv:#1d2230;--ac:#4f8cff;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;padding:15px;background:var(--bg);color:var(--fg);font:16px/1.7 Tahoma,"Segoe UI",system-ui,sans-serif}
+main{max-width:720px;margin:auto}
+h1{font-size:26px;margin:0 0 4px}
+.mut{color:var(--mut);font-size:14px}
+.box{border:1px solid var(--bd);border-radius:14px;padding:14px;margin:14px 0}
+label{display:block;font-size:14px;color:var(--mut);margin:8px 0 4px}
+input,textarea{width:100%;background:none;border:1px solid var(--bd);border-radius:10px;padding:10px;font:inherit;color:inherit}
+textarea{min-height:200px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{font:inherit;color:inherit;background:var(--hv);border:1px solid var(--bd);border-radius:10px;padding:10px 16px;cursor:pointer}
+#rec{background:var(--ac);border-color:var(--ac);color:#fff;font-size:18px;padding:14px 24px;border-radius:14px}
+#rec.on{background:#dc2626;border-color:#dc2626;animation:p 1s infinite}
+@keyframes p{50%{opacity:.6}}
+@media(prefers-reduced-motion:reduce){#rec.on{animation:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>🎙️ تبدیل گفتار به متن</h1>
+<div class="mut">با Google AI Studio و Gemini API</div>
+
+<div class="box">
+  <label for="key">API Key (فقط تو مرورگر خودت ذخیره می‌شه)</label>
+  <input id="key" type="password" placeholder="AIza..." autocomplete="off">
+  <label for="model">نام مدل (از بخش Docs تو AI Studio)</label>
+  <input id="model" list="ml" value="gemini-3.8-flash">
+  <datalist id="ml"></datalist>
+  <div class="row" style="margin-top:10px">
+    <button id="save">💾 ذخیره</button>
+    <button id="lm">📋 لیست مدل‌ها</button>
+  </div>
+</div>
+
+<div class="row">
+  <button id="rec">🎤 شروع ضبط</button>
+  <label style="margin:0">یا فایل صوتی: <input id="file" type="file" accept="audio/*" style="width:auto;border:0"></label>
+</div>
+<div class="mut" id="st" style="margin:10px 0"></div>
+
+<textarea id="out" placeholder="متن اینجا نمایش داده می‌شه..." dir="auto"></textarea>
+<div class="row" style="margin-top:8px"><button id="copy">📄 کپی متن</button></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const BASE="https://generativelanguage.googleapis.com/v1beta/";
+const PROMPT="Transcribe this audio exactly as spoken, in its original language. Output only the transcript, nothing else.";
+try{$("key").value=localStorage.getItem("gkey")||"";$("model").value=localStorage.getItem("gmodel")||$("model").value}catch(e){}
+const say=t=>$("st").textContent=t;
+
+$("save").onclick=()=>{try{localStorage.setItem("gkey",$("key").value.trim());localStorage.setItem("gmodel",$("model").value.trim());say("✅ ذخیره شد")}catch(e){say("❌ ذخیره ممکن نشد")}};
+
+$("lm").onclick=async()=>{
+  try{
+    const r=await fetch(BASE+"models?pageSize=100",{headers:{"x-goog-api-key":$("key").value.trim()}});
+    const j=await r.json();if(!r.ok)throw new Error(j.error?.message||r.status);
+    $("ml").innerHTML=j.models.filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent")).map(m=>`<option value="${m.name.replace("models/","")}">`).join("");
+    say("✅ لیست مدل‌ها بارگذاری شد؛ روی کادر نام مدل بزن و یکی رو انتخاب کن");
+  }catch(e){say("❌ "+e.message)}
+};
+
+// تبدیل هر فایل صوتی به WAV مونو ۱۶ کیلوهرتز (فرمتی که Gemini حتماً می‌پذیره)
+async function toWav(blob){
+  const ctx=new (window.AudioContext||window.webkitAudioContext)();
+  const buf=await ctx.decodeAudioData(await blob.arrayBuffer());
+  const rate=16000,len=Math.floor(buf.duration*rate);
+  const off=new OfflineAudioContext(1,len,rate),src=off.createBufferSource();
+  src.buffer=buf;src.connect(off.destination);src.start();
+  const pcm=(await off.startRendering()).getChannelData(0);
+  const o=new DataView(new ArrayBuffer(44+len*2));
+  const w=(p,s)=>[...s].forEach((c,i)=>o.setUint8(p+i,c.charCodeAt(0)));
+  w(0,"RIFF");o.setUint32(4,36+len*2,true);w(8,"WAVEfmt ");o.setUint32(16,16,true);
+  o.setUint16(20,1,true);o.setUint16(22,1,true);o.setUint32(24,rate,true);o.setUint32(28,rate*2,true);
+  o.setUint16(32,2,true);o.setUint16(34,16,true);w(36,"data");o.setUint32(40,len*2,true);
+  for(let i=0;i<len;i++){const s=Math.max(-1,Math.min(1,pcm[i]));o.setInt16(44+i*2,s<0?s*32768:s*32767,true)}
+  return new Blob([o],{type:"audio/wav"});
+}
+const b64=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result.split(",")[1]);f.readAsDataURL(b)});
+
+async function transcribe(blob){
+  const key=$("key").value.trim(),model=$("model").value.trim();
+  if(!key){say("❌ اول API Key رو وارد کن");return}
+  try{
+    say("⏳ در حال آماده‌سازی صدا...");
+    const wav=await toWav(blob);
+    say("⏳ در حال ارسال به Gemini...");
+    const r=await fetch(`${BASE}models/${model}:generateContent`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-goog-api-key":key},
+      body:JSON.stringify({contents:[{parts:[{text:PROMPT},{inline_data:{mime_type:"audio/wav",data:await b64(wav)}}]}]})
+    });
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error?.message||("خطای "+r.status));
+    $("out").value=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim()||"(متنی دریافت نشد)";
+    say("✅ تمام شد");
+  }catch(e){say("❌ "+e.message)}
+}
+
+let mr=null,chunks=[];
+$("rec").onclick=async()=>{
+  if(mr&&mr.state==="recording"){mr.stop();return}
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    mr=new MediaRecorder(stream);chunks=[];
+    mr.ondataavailable=e=>chunks.push(e.data);
+    mr.onstop=()=>{stream.getTracks().forEach(t=>t.stop());$("rec").classList.remove("on");$("rec").textContent="🎤 شروع ضبط";transcribe(new Blob(chunks,{type:mr.mimeType}))};
+    mr.start();$("rec").classList.add("on");$("rec").textContent="⏹ توقف ضبط";say("🔴 در حال ضبط... وقتی تموم شد دکمه رو بزن");
+  }catch(e){say("❌ دسترسی به میکروفن ممکن نشد")}
+};
+$("file").onchange=e=>{if(e.target.files[0])transcribe(e.target.files[0])};
+$("copy").onclick=async()=>{try{await navigator.clipboard.writeText($("out").value);say("✅ کپی شد")}catch(e){say("❌ کپی ممکن نشد")}};
+</script>
+</body>
+</html>
